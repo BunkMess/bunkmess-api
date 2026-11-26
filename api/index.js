@@ -195,7 +195,7 @@ async function getGoogleAccessToken(email, rawKey) {
   });
   let d;
   try { d = JSON.parse(txt); } catch { throw new Error(`OAuth (${status}): ${txt.slice(0, 120)}`); }
-  if (!d.access_token) throw new Error(d.error_description || d.error || "Ошибка ключа Firebase Admin");
+  if (!d.access_token) throw new Error("Google ответ: " + JSON.stringify(d));
   return d.access_token;
 }
 
