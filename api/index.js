@@ -46,10 +46,14 @@ const server = http.createServer(async (req, res) => {
     const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
     const dbUrl = `https://googleapis.com{PROJECT_ID}/databases/(default)/documents`;
 
-    const getDoc = async (path) => {
+      const getDoc = async (path) => {
       const r = await fetch(`${dbUrl}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
-      if (!r.ok) return null;
-      return fromFs(await r.json());
+      const txt = await r.text();
+      if (!r.ok) {
+        if (r.status === 404 && !txt.startsWith("<")) return null;
+        throw new Error(`Firestore (${r.status}) [${PROJECT_ID}]: ${txt.slice(0, 120)}`);
+      }
+      return fromFs(JSON.parse(txt));
     };
 
     const patchDoc = async (path, data) => {
