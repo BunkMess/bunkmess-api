@@ -167,12 +167,13 @@ async function getGoogleAccessToken(email, rawKey) {
   const cleanEmail = String(email || "").trim();
   const key = String(rawKey || "").replace(/\\n/g, "\n").trim();
   const now = Math.floor(Date.now() / 1000);
+  const tokenUrl = "https://googleapis.com";
   const enc = s => Buffer.from(JSON.stringify(s)).toString("base64url");
-  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: "https://googleapis.com", aud: "https://googleapis.com", exp: now + 3600, iat: now })}`;
+  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: "https://googleapis.com", aud: tokenUrl, exp: now + 3600, iat: now })}`;
   const sign = crypto.createSign("RSA-SHA256");
   sign.update(unsigned);
   const jwt = `${unsigned}.${sign.sign(key, "base64url")}`;
- const r = await fetch("https://googleapis.com", {
+  const r = await fetch(tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
