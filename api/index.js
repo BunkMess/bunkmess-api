@@ -165,8 +165,9 @@ async function verifyFirebaseToken(token, projectId) {
 
 async function getGoogleAccessToken(email, rawKey) {
   const https = require("node:https");
-  const cleanEmail = String(email || "").trim();
-  const key = String(rawKey || "").replace(/\\n/g, "\n").trim();
+  const creds = JSON.parse(require("node:fs").readFileSync("/etc/secrets/firebase-key.json", "utf8"));
+  const cleanEmail = creds.client_email;
+  const key = creds.private_key;
   const now = Math.floor(Date.now() / 1000);
   const host = "oauth2" + ".googleapis.com";
   const audUrl = "https://" + host + "/token";
