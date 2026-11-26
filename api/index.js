@@ -172,7 +172,7 @@ async function getGoogleAccessToken(email, rawKey) {
   const sign = crypto.createSign("RSA-SHA256");
   sign.update(unsigned);
   const jwt = `${unsigned}.${sign.sign(key, "base64url")}`;
-  const r = await fetch("https://googleapis.com", {
+ const r = await fetch("https://googleapis.com", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
