@@ -43,17 +43,21 @@ const server = http.createServer(async (req, res) => {
     const { PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY } = process.env;
     const uid = await verifyFirebaseToken(token, PROJECT_ID);
 
-    const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
-    const dbUrl = `https://googleapis.com{PROJECT_ID}/databases/(default)/documents`;
+       const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
+    const dbUrl = `https://googleapis.com{String(PROJECT_ID).trim()}/databases/(default)/documents`;
 
-      const getDoc = async (path) => {
-      const r = await fetch(`${dbUrl}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
+    const safeJson = async (r, label) => {
       const txt = await r.text();
-      if (!r.ok) {
-        if (r.status === 404 && !txt.startsWith("<")) return null;
-        throw new Error(`Firestore (${r.status}) [${PROJECT_ID}]: ${txt.slice(0, 120)}`);
-      }
-      return fromFs(JSON.parse(txt));
+      try { return JSON.parse(txt); }
+      catch { throw new Error(`${label} (${r.status}): ${txt.slice(0, 120)}`); }
+    };
+
+    const getDoc = async (path) => {
+      const r = await fetch(`${dbUrl}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
+      if (r.status === 404) return null;
+      const d = await safeJson(r, `GET ${path}`);
+      if (!r.ok) throw new Error(d.error?.message || `GET ${path} failed`);
+      return fromFs(d);
     };
 
     const patchDoc = async (path, data) => {
@@ -64,7 +68,8 @@ const server = http.createServer(async (req, res) => {
         headers: { Authorization: `Bearer ${gToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ fields })
       });
-      if (!r.ok) throw new Error(await r.text());
+      const d = await safeJson(r, `PATCH ${path}`);
+      if (!r.ok) throw new Error(d.error?.message || `PATCH ${path} failed`);
     };
 
     const me = await getDoc(`users/${uid}`);
@@ -159,10 +164,11 @@ async function verifyFirebaseToken(token, projectId) {
 }
 
 async function getGoogleAccessToken(email, rawKey) {
-  const key = rawKey.replace(/\\n/g, "\n");
+  const cleanEmail = String(email || "").trim();
+  const key = String(rawKey || "").replace(/\\n/g, "\n").trim();
   const now = Math.floor(Date.now() / 1000);
   const enc = s => Buffer.from(JSON.stringify(s)).toString("base64url");
-  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: email, scope: "https://googleapis.com", aud: "https://googleapis.com", exp: now + 3600, iat: now })}`;
+  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: "https://googleapis.com", aud: "https://googleapis.com", exp: now + 3600, iat: now })}`;
   const sign = crypto.createSign("RSA-SHA256");
   sign.update(unsigned);
   const jwt = `${unsigned}.${sign.sign(key, "base64url")}`;
@@ -171,8 +177,10 @@ async function getGoogleAccessToken(email, rawKey) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
   });
-  const d = await r.json();
-  if (!d.access_token) throw new Error("Ошибка ключа Firebase Admin");
+  const txt = await r.text();
+  let d;
+  try { d = JSON.parse(txt); } catch { throw new Error(`OAuth (${r.status}): ${txt.slice(0, 120)}`); }
+  if (!d.access_token) throw new Error(d.error_description || d.error || "Ошибка ключа Firebase Admin");
   return d.access_token;
 }
 
