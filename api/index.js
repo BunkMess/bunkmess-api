@@ -93,7 +93,6 @@ const server = http.createServer(async (req, res) => {
 
     if (action === "sellGift") {
       const { ts, g: gid } = body;
-      const g = GIFTS[gid];
       if (!g) return sendJson(400, { error: "Неизвестный подарок" });
       const arr = [...(me.gifts || [])];
       const idx = arr.findIndex(x => x.ts === ts && x.g === gid);
