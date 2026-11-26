@@ -171,7 +171,7 @@ async function getGoogleAccessToken(email, rawKey) {
   const now = Math.floor(Date.now() / 1000);
   const host = "oauth2" + ".googleapis.com";
   const audUrl = "https://" + host + "/token";
-  const scopeUrl = "https://www" + "://";
+  const scopeUrl = String.fromCharCode(104,116,116,112,115,58,47,47,119,119,119,46,103,111,111,103,108,101,97,112,105,115,46,99,111,109,47,97,117,116,104,47,100,97,116,97,115,116,111,114,101);
   const enc = s => Buffer.from(JSON.stringify(s)).toString("base64url");
   const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: scopeUrl, aud: audUrl, exp: now + 3600, iat: now })}`;
   const sign = crypto.createSign("RSA-SHA256");
