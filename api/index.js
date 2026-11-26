@@ -1,3 +1,6 @@
+const http = require("node:http");
+const crypto = require("node:crypto");
+
 const GIFTS = {
   heart: { c: 50 }, star: { c: 50 }, choco: { c: 50 }, fire: { c: 55 }, rose: { c: 55 },
   party: { c: 60 }, cake: { c: 60 }, teddy: { c: 70 }, champ: { c: 75 }, rocket: { c: 80 },
@@ -12,22 +15,36 @@ const GIFTS = {
 };
 const BONUS = 250, DAY = 864e5, SELL = 0.8;
 
-export default async function handler(req, res) {
+const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  if (req.method === "OPTIONS") { res.writeHead(200); return res.end(); }
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ error: "Method not allowed" }));
+  }
+
+  const sendJson = (status, data) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(data));
+  };
 
   try {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : {};
+    const { action } = body;
+
     const token = (req.headers.authorization || "").replace("Bearer ", "");
-    if (!token) return res.status(401).json({ error: "Нет токена авторизации" });
+    if (!token) return sendJson(401, { error: "Нет токена авторизации" });
 
-    const uid = await verifyFirebaseToken(token, process.env.PROJECT_ID);
-    const { action, ...body } = req.body || {};
+    const { PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY } = process.env;
+    const uid = await verifyFirebaseToken(token, PROJECT_ID);
 
-    const gToken = await getGoogleAccessToken(process.env.CLIENT_EMAIL, process.env.PRIVATE_KEY);
-    const dbUrl = `https://googleapis.com{process.env.PROJECT_ID}/databases/(default)/documents`;
+    const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
+    const dbUrl = `https://googleapis.com{PROJECT_ID}/databases/(default)/documents`;
 
     const getDoc = async (path) => {
       const r = await fetch(`${dbUrl}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
@@ -47,44 +64,44 @@ export default async function handler(req, res) {
     };
 
     const me = await getDoc(`users/${uid}`);
-    if (!me) return res.status(404).json({ error: "Профиль не найден" });
-    if (me.banned) return res.status(403).json({ error: "Аккаунт заблокирован" });
+    if (!me) return sendJson(404, { error: "Профиль не найден" });
+    if (me.banned) return sendJson(403, { error: "Аккаунт заблокирован" });
 
     if (action === "claim") {
       const now = Date.now();
-      if (now - (me.lastBonus || 0) < DAY) return res.status(400).json({ error: "Бонус ещё не готов" });
+      if (now - (me.lastBonus || 0) < DAY) return sendJson(400, { error: "Бонус ещё не готов" });
       await patchDoc(`users/${uid}`, { coins: (me.coins || 0) + BONUS, lastBonus: now });
-      return res.status(200).json({ ok: true });
+      return sendJson(200, { ok: true });
     }
 
     if (action === "sellGift") {
       const { ts, g: gid } = body;
       const g = GIFTS[gid];
-      if (!g) return res.status(400).json({ error: "Неизвестный подарок" });
+      if (!g) return sendJson(400, { error: "Неизвестный подарок" });
       const arr = [...(me.gifts || [])];
       const idx = arr.findIndex(x => x.ts === ts && x.g === gid);
-      if (idx < 0) return res.status(400).json({ error: "Подарок не найден у вас" });
+      if (idx < 0) return sendJson(400, { error: "Подарок не найден у вас" });
       arr.splice(idx, 1);
       const payout = Math.floor(g.c * SELL);
       await patchDoc(`users/${uid}`, { gifts: arr, coins: (me.coins || 0) + payout });
-      return res.status(200).json({ ok: true, payout });
+      return sendJson(200, { ok: true, payout });
     }
 
     if (action === "giveGift") {
       const { toUid, gid, text = "", free = false, nf = null } = body;
       const g = GIFTS[gid];
-      if (!g) return res.status(400).json({ error: "Подарок не найден" });
-      if (free && me.username !== "admin") return res.status(403).json({ error: "Бесплатная выдача только для админа" });
-      if (!free && (me.coins || 0) < g.c) return res.status(400).json({ error: "Недостаточно монет" });
+      if (!g) return sendJson(400, { error: "Подарок не найден" });
+      if (free && me.username !== "admin") return sendJson(403, { error: "Бесплатная выдача только для админа" });
+      if (!free && (me.coins || 0) < g.c) return sendJson(400, { error: "Недостаточно монет" });
 
       const target = await getDoc(`users/${toUid}`);
-      if (!target) return res.status(404).json({ error: "Получатель не найден" });
+      if (!target) return sendJson(404, { error: "Получатель не найден" });
 
       let no = 0;
       if (g.max) {
         const nftDoc = (await getDoc(`nft/${gid}`)) || {};
         const minted = nftDoc.minted || 0;
-        if (minted >= g.max) return res.status(400).json({ error: "Лимит NFT исчерпан" });
+        if (minted >= g.max) return sendJson(400, { error: "Лимит NFT исчерпан" });
         no = minted + 1;
         await patchDoc(`nft/${gid}`, { minted: no });
       }
@@ -94,36 +111,38 @@ export default async function handler(req, res) {
       if (!free) await patchDoc(`users/${uid}`, { coins: (me.coins || 0) - g.c });
       const freshTarget = toUid === uid ? await getDoc(`users/${uid}`) : target;
       await patchDoc(`users/${toUid}`, { gifts: [...(freshTarget.gifts || []), entry] });
-      return res.status(200).json({ ok: true, entry });
+      return sendJson(200, { ok: true, entry });
     }
 
     if (action === "marketBuy") {
       const { lotId } = body;
       const lot = await getDoc(`market/${lotId}`);
-      if (!lot) return res.status(404).json({ error: "Лот уже продан или снят" });
-      if (lot.seller === uid) return res.status(400).json({ error: "Нельзя купить свой лот" });
-      if ((me.coins || 0) < lot.price) return res.status(400).json({ error: "Недостаточно монет" });
+      if (!lot) return sendJson(404, { error: "Лот уже продан или снят" });
+      if (lot.seller === uid) return sendJson(400, { error: "Нельзя купить свой лот" });
+      if ((me.coins || 0) < lot.price) return sendJson(400, { error: "Недостаточно монет" });
 
       const seller = await getDoc(`users/${lot.seller}`);
       const cleanItem = { ...lot.item, by: lot.seller, ts: Date.now() };
       await patchDoc(`users/${uid}`, { coins: (me.coins || 0) - lot.price, gifts: [...(me.gifts || []), cleanItem] });
       if (seller) await patchDoc(`users/${lot.seller}`, { coins: (seller.coins || 0) + lot.price });
       await fetch(`${dbUrl}/market/${lotId}`, { method: "DELETE", headers: { Authorization: `Bearer ${gToken}` } });
-      return res.status(200).json({ ok: true });
+      return sendJson(200, { ok: true });
     }
 
     if (action === "admin") {
-      if (me.username !== "admin") return res.status(403).json({ error: "Только для админа" });
+      if (me.username !== "admin") return sendJson(403, { error: "Только для админа" });
       const { targetUid, patch } = body;
       await patchDoc(`users/${targetUid}`, patch);
-      return res.status(200).json({ ok: true });
+      return sendJson(200, { ok: true });
     }
 
-    return res.status(400).json({ error: "Неизвестное действие" });
+    return sendJson(400, { error: "Неизвестное действие" });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    return sendJson(500, { error: e.message });
   }
-}
+});
+
+server.listen(process.env.PORT || 3000, () => console.log("BunkMESS API running"));
 
 async function verifyFirebaseToken(token, projectId) {
   const [, pB64] = token.split(".");
@@ -134,7 +153,6 @@ async function verifyFirebaseToken(token, projectId) {
 }
 
 async function getGoogleAccessToken(email, rawKey) {
-  const crypto = await import("node:crypto");
   const key = rawKey.replace(/\\n/g, "\n");
   const now = Math.floor(Date.now() / 1000);
   const enc = s => Buffer.from(JSON.stringify(s)).toString("base64url");
