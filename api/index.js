@@ -1,6 +1,6 @@
 const http = require("node:http");
-const https = require("node:https");
 const crypto = require("node:crypto");
+
 const GIFTS = {
   heart: { c: 50 }, star: { c: 50 }, choco: { c: 50 }, fire: { c: 55 }, rose: { c: 55 },
   party: { c: 60 }, cake: { c: 60 }, teddy: { c: 70 }, champ: { c: 75 }, rocket: { c: 80 },
@@ -14,48 +14,56 @@ const GIFTS = {
   n_saturn: { c: 28000, max: 12 }, n_moon: { c: 36000, max: 9 }, n_sun: { c: 42000, max: 7 }
 };
 const BONUS = 250, DAY = 864e5, SELL = 0.8;
+
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
   if (req.method === "OPTIONS") { res.writeHead(200); return res.end(); }
   if (req.method !== "POST") {
     res.writeHead(405, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ error: "Method not allowed" }));
   }
+
   const sendJson = (status, data) => {
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(data));
   };
+
   try {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
     const { action } = body;
+
     const token = (req.headers.authorization || "").replace("Bearer ", "");
     if (!token) return sendJson(401, { error: "Нет токена авторизации" });
+
     const { PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY } = process.env;
-    const pid = String(PROJECT_ID || "").trim();
-    const uid = await verifyFirebaseToken(token, pid);
-    const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
-    const fsHost = "firestore" + ".googleapis.com";
-    const dbBase = "https://" + fsHost + "/v1/projects/" + pid + "/databases/(default)/documents";
+    const uid = await verifyFirebaseToken(token, PROJECT_ID);
+
+       const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
+    const dbUrl = `https://googleapis.com{String(PROJECT_ID).trim()}/databases/(default)/documents`;
+
     const safeJson = async (r, label) => {
       const txt = await r.text();
       try { return JSON.parse(txt); }
       catch { throw new Error(`${label} (${r.status}): ${txt.slice(0, 120)}`); }
     };
+
     const getDoc = async (path) => {
-      const r = await fetch(`${dbBase}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
+      const r = await fetch(`${dbUrl}/${path}`, { headers: { Authorization: `Bearer ${gToken}` } });
       if (r.status === 404) return null;
       const d = await safeJson(r, `GET ${path}`);
       if (!r.ok) throw new Error(d.error?.message || `GET ${path} failed`);
       return fromFs(d);
     };
+
     const patchDoc = async (path, data) => {
       const fields = toFs(data).mapValue.fields;
       const mask = Object.keys(data).map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");
-      const r = await fetch(`${dbBase}/${path}?${mask}`, {
+      const r = await fetch(`${dbUrl}/${path}?${mask}`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${gToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ fields })
@@ -63,15 +71,18 @@ const server = http.createServer(async (req, res) => {
       const d = await safeJson(r, `PATCH ${path}`);
       if (!r.ok) throw new Error(d.error?.message || `PATCH ${path} failed`);
     };
+
     const me = await getDoc(`users/${uid}`);
     if (!me) return sendJson(404, { error: "Профиль не найден" });
     if (me.banned) return sendJson(403, { error: "Аккаунт заблокирован" });
+
     if (action === "claim") {
       const now = Date.now();
       if (now - (me.lastBonus || 0) < DAY) return sendJson(400, { error: "Бонус ещё не готов" });
       await patchDoc(`users/${uid}`, { coins: (me.coins || 0) + BONUS, lastBonus: now });
       return sendJson(200, { ok: true });
     }
+
     if (action === "sellGift") {
       const { ts, g: gid } = body;
       const g = GIFTS[gid];
@@ -84,14 +95,17 @@ const server = http.createServer(async (req, res) => {
       await patchDoc(`users/${uid}`, { gifts: arr, coins: (me.coins || 0) + payout });
       return sendJson(200, { ok: true, payout });
     }
+
     if (action === "giveGift") {
       const { toUid, gid, text = "", free = false, nf = null } = body;
       const g = GIFTS[gid];
       if (!g) return sendJson(400, { error: "Подарок не найден" });
       if (free && me.username !== "admin") return sendJson(403, { error: "Бесплатная выдача только для админа" });
       if (!free && (me.coins || 0) < g.c) return sendJson(400, { error: "Недостаточно монет" });
+
       const target = await getDoc(`users/${toUid}`);
       if (!target) return sendJson(404, { error: "Получатель не найден" });
+
       let no = 0;
       if (g.max) {
         const nftDoc = (await getDoc(`nft/${gid}`)) || {};
@@ -100,6 +114,7 @@ const server = http.createServer(async (req, res) => {
         no = minted + 1;
         await patchDoc(`nft/${gid}`, { minted: no });
       }
+
       const ts = Date.now();
       const entry = { g: gid, by: uid, n: me.name, t: String(text).slice(0, 140), ts, ...(g.max ? { no, nf } : {}) };
       if (!free) await patchDoc(`users/${uid}`, { coins: (me.coins || 0) - g.c });
@@ -107,40 +122,49 @@ const server = http.createServer(async (req, res) => {
       await patchDoc(`users/${toUid}`, { gifts: [...(freshTarget.gifts || []), entry] });
       return sendJson(200, { ok: true, entry });
     }
+
     if (action === "marketBuy") {
       const { lotId } = body;
       const lot = await getDoc(`market/${lotId}`);
       if (!lot) return sendJson(404, { error: "Лот уже продан или снят" });
       if (lot.seller === uid) return sendJson(400, { error: "Нельзя купить свой лот" });
       if ((me.coins || 0) < lot.price) return sendJson(400, { error: "Недостаточно монет" });
+
       const seller = await getDoc(`users/${lot.seller}`);
       const cleanItem = { ...lot.item, by: lot.seller, ts: Date.now() };
       await patchDoc(`users/${uid}`, { coins: (me.coins || 0) - lot.price, gifts: [...(me.gifts || []), cleanItem] });
       if (seller) await patchDoc(`users/${lot.seller}`, { coins: (seller.coins || 0) + lot.price });
-      await fetch(`${dbBase}/market/${lotId}`, { method: "DELETE", headers: { Authorization: `Bearer ${gToken}` } });
+      await fetch(`${dbUrl}/market/${lotId}`, { method: "DELETE", headers: { Authorization: `Bearer ${gToken}` } });
       return sendJson(200, { ok: true });
     }
+
     if (action === "admin") {
       if (me.username !== "admin") return sendJson(403, { error: "Только для админа" });
       const { targetUid, patch } = body;
       await patchDoc(`users/${targetUid}`, patch);
       return sendJson(200, { ok: true });
     }
+
     return sendJson(400, { error: "Неизвестное действие" });
   } catch (e) {
     return sendJson(500, { error: e.message });
   }
 });
+
 server.listen(process.env.PORT || 3000, () => console.log("BunkMESS API running"));
-async function verifyFirebaseToken(token, cleanId) {
+
+async function verifyFirebaseToken(token, projectId) {
   const [, pB64] = token.split(".");
   if (!pB64) throw new Error("Неверный формат токена");
   const payload = JSON.parse(Buffer.from(pB64, "base64url").toString("utf8"));
+  const cleanId = String(projectId || "").trim();
   if (cleanId && payload.aud !== cleanId) throw new Error(`Неверный проект: ${payload.aud} != ${cleanId}`);
   if (payload.exp * 1000 < Date.now() - 300000) throw new Error("Токен устарел");
   return payload.user_id || payload.sub;
 }
+
 async function getGoogleAccessToken(email, rawKey) {
+  const https = require("node:https");
   const cleanEmail = String(email || "").trim();
   const key = String(rawKey || "").replace(/\\n/g, "\n").trim();
   const now = Math.floor(Date.now() / 1000);
@@ -173,6 +197,7 @@ async function getGoogleAccessToken(email, rawKey) {
   if (!d.access_token) throw new Error(d.error_description || d.error || "Ошибка ключа Firebase Admin");
   return d.access_token;
 }
+
 function toFs(v) {
   if (v === null || v === undefined) return { nullValue: null };
   if (typeof v === "boolean") return { booleanValue: v };
@@ -183,24 +208,24 @@ function toFs(v) {
   for (const k of Object.keys(v)) fields[k] = toFs(v[k]);
   return { mapValue: { fields } };
 }
+
 function fromFs(doc) {
   if (!doc || !doc.fields) return null;
   const parse = val => {
     if ("nullValue" in val) return null;
-Use code with caution.
-if ("booleanValue" in val) return val.booleanValue;
-if ("integerValue" in val) return Number(val.integerValue);
-if ("doubleValue" in val) return Number(val.doubleValue);
-if ("stringValue" in val) return val.stringValue;
-if ("arrayValue" in val) return (val.arrayValue.values || []).map(parse);
-if ("mapValue" in val) {
-const o = {};
-for (const k of Object.keys(val.mapValue.fields || {})) o[k] = parse(val.mapValue.fields[k]);
-return o;
-}
-return null;
-};
-const res = {};
-for (const k of Object.keys(doc.fields)) res[k] = parse(doc.fields[k]);
-return res;
+    if ("booleanValue" in val) return val.booleanValue;
+    if ("integerValue" in val) return Number(val.integerValue);
+    if ("doubleValue" in val) return Number(val.doubleValue);
+    if ("stringValue" in val) return val.stringValue;
+    if ("arrayValue" in val) return (val.arrayValue.values || []).map(parse);
+    if ("mapValue" in val) {
+      const o = {};
+      for (const k of Object.keys(val.mapValue.fields || {})) o[k] = parse(val.mapValue.fields[k]);
+      return o;
+    }
+    return null;
+  };
+  const res = {};
+  for (const k of Object.keys(doc.fields)) res[k] = parse(doc.fields[k]);
+  return res;
 }
