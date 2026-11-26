@@ -107,7 +107,7 @@ const server = http.createServer(async (req, res) => {
     if (action === "giveGift") {
       const { toUid, gid, text = "", free = false, nf = null } = body;
       const g = GIFTS[gid];
-      if (!g) return sendJson(400, { error: "Подарок не найден" });
+      const g = GIFTS[gid] || { c: Number(body.cost) || 3000, max: Number(body.max) || 50 };
       if (free && me.username !== "admin") return sendJson(403, { error: "Бесплатная выдача только для админа" });
       if (!free && (me.coins || 0) < g.c) return sendJson(400, { error: "Недостаточно монет" });
 
