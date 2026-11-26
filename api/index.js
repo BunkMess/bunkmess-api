@@ -148,7 +148,9 @@ async function verifyFirebaseToken(token, projectId) {
   const [, pB64] = token.split(".");
   if (!pB64) throw new Error("Неверный формат токена");
   const payload = JSON.parse(Buffer.from(pB64, "base64url").toString("utf8"));
-  if (payload.aud !== projectId || payload.exp * 1000 < Date.now()) throw new Error("Токен просрочен");
+  const cleanId = String(projectId || "").trim();
+  if (cleanId && payload.aud !== cleanId) throw new Error(`Неверный проект: ${payload.aud} != ${cleanId}`);
+  if (payload.exp * 1000 < Date.now() - 300000) throw new Error("Токен устарел");
   return payload.user_id || payload.sub;
 }
 
