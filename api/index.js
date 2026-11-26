@@ -164,23 +164,35 @@ async function verifyFirebaseToken(token, projectId) {
 }
 
 async function getGoogleAccessToken(email, rawKey) {
+  const https = require("node:https");
   const cleanEmail = String(email || "").trim();
   const key = String(rawKey || "").replace(/\\n/g, "\n").trim();
   const now = Math.floor(Date.now() / 1000);
-  const tokenUrl = "https://googleapis.com";
   const enc = s => Buffer.from(JSON.stringify(s)).toString("base64url");
-  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: "https://googleapis.com", aud: tokenUrl, exp: now + 3600, iat: now })}`;
+  const unsigned = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: cleanEmail, scope: "https://googleapis.com", aud: "https://googleapis.com", exp: now + 3600, iat: now })}`;
   const sign = crypto.createSign("RSA-SHA256");
   sign.update(unsigned);
   const jwt = `${unsigned}.${sign.sign(key, "base64url")}`;
-  const r = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+  const postData = `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`;
+
+  const { status, txt } = await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: "://googleapis.com",
+      path: "/token",
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(postData) }
+    }, res => {
+      let data = "";
+      res.on("data", c => data += c);
+      res.on("end", () => resolve({ status: res.statusCode, txt: data }));
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
   });
-  const txt = await r.text();
+
   let d;
-  try { d = JSON.parse(txt); } catch { throw new Error(`OAuth (${r.status}): ${txt.slice(0, 120)}`); }
+  try { d = JSON.parse(txt); } catch { throw new Error(`OAuth (${status}): ${txt.slice(0, 120)}`); }
   if (!d.access_token) throw new Error(d.error_description || d.error || "Ошибка ключа Firebase Admin");
   return d.access_token;
 }
