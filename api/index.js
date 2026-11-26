@@ -44,7 +44,7 @@ const server = http.createServer(async (req, res) => {
     const uid = await verifyFirebaseToken(token, PROJECT_ID);
 
        const gToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
-    const dbUrl = `https://googleapis.com{String(PROJECT_ID).trim()}/databases/(default)/documents`;
+    const dbUrl = String.fromCharCode(104,116,116,112,115,58,47,47,102,105,114,101,115,116,111,114,101,46,103,111,111,103,108,101,97,112,105,115,46,99,111,109,47,118,49,47,112,114,111,106,101,99,116,115,47) + String(PROJECT_ID).trim() + "/databases/(default)/documents";
 
     const safeJson = async (r, label) => {
       const txt = await r.text();
